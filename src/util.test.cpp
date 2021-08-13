@@ -43,6 +43,16 @@ TEST(util,memory_usage_str){
 		EXPECT_EQ(util::getMemoryUsage(arr),"16.00 B");
 	}
 }
+TEST(util,unpack_iter_ref){
+	auto text = "abc def ghi";
+	auto range = util::split(text," ");
+	auto iter = range.begin();
+	auto [first,second] = util::unpack<2>(iter);
+
+	EXPECT_EQ(first,"abc");
+	EXPECT_EQ(second,"def");
+	EXPECT_EQ(*iter,"def");
+}
 RC_GTEST_PROP(util,concatenating_splitstring_yields_original,(const std::string& str, const std::string& delim)){
 	RC_PRE(!delim.empty());
 	std::string res;

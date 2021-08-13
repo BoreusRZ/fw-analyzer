@@ -1,6 +1,7 @@
 #pragma once
 #include <string_view>
 #include <fmt/core.h>
+#include <functional>
 
 namespace mlog {
 	enum class Level {
@@ -18,12 +19,12 @@ namespace mlog {
 
 	template<typename ... Args>
 	void print(std::string_view format_string, Args...args){
-		fmt::print(format_string,args...);
+		fmt::print(fmt::runtime(format_string),args...);
 	}
 	template<typename ... Args>
 	void log(std::string_view format_string, Args...args){
 		printPrefix();
-		fmt::print(format_string,args...);
+		fmt::print(fmt::runtime(format_string),args...);
 		printPostfix();
 	}
 	template<Level level, typename ... Args>

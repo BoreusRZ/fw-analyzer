@@ -178,9 +178,9 @@ public:
 	bool operator==(const self_t& other) const{
 		return start_m == other.start_m && end_m == other.end_m && parent_t::operator==(other);
 	}
-	bool operator!=(const self_t& other) const{
-		return !(*this == other);
-	}
+	/* bool operator!=(const self_t& other) const{ */
+	/* 	return !(*this == other); */
+	/* } */
 	friend self_t intersect(const self_t& s1, const self_t& s2){
 		self_t ret = s1;
 		ret.intersect(s2);

@@ -1,4 +1,5 @@
 #include "RulesetParser.hpp"
+#include "try_parser.hpp"
 #include "log.hpp"
 #include <functional>
 #include <fstream>
@@ -258,6 +259,10 @@ void RulesetParser::parseTable(std::istream& in, std::string&& table_name){
 			mlog::log("ignoring \"{}\"\n",line);
 		}
 	}
+	finishChains();
+}
+void RulesetParser::finishChains(){
+	if(tables.empty())return;
 	for (auto& [chain_name, chain]  : chains) {
 		if(chain_name == "ACCEPT")chain->special = Chain::Special::ACCEPT;
 		else if(chain_name == "DROP")chain->special = Chain::Special::DROP;
@@ -268,6 +273,238 @@ void RulesetParser::parseTable(std::istream& in, std::string&& table_name){
 		curTable().chains.emplace_back(std::move(chain));
 	}
 	chains.clear();
+}
+void RulesetParser::parseRuleset_NFT(std::string_view filename){
+	std::ifstream file(filename.data());
+	if(!file.good()){
+		mlog::fatal("could not open \"{}\"\n",filename);
+	}
+	mlog::log("parsing ruleset file \"{}\"\n",filename);
+	parseRuleset_NFT(file);
+	mlog::success("done parsing ruleset file \"{}\"\n",filename);
+}
+Chain& RulesetParser::getChainOrCreate_NFT(const std::string_view table_name, const std::string_view chain_name){
+	auto& chain_entry = nft_chains[std::string{table_name}][std::string{chain_name}];
+	if(!chain_entry.get()){
+		chain_entry = std::make_unique<Chain>();
+		chain_entry->name = chain_name;
+	}
+	return *chain_entry.get();
+}
+void RulesetParser::parseRuleset_NFT(std::istream& in){
+	std::string line;
+	while(true){
+		std::getline(in,line);
+		this->line++;
+		if(in.eof() || !in.good())break;
+
+		try_parser parser{line};
+		auto add = parser.string();
+		if(add == "#"){
+			continue;
+		}
+		if(add != "add"){
+			mlog::warn("unknown word \"{}\" in line {}",add,this->line);
+		}
+
+		parser.ws();
+		auto add_type = parser.string();
+		parser.ws();
+		auto family = parser.string();
+		parser.ws();
+		auto table_name = parser.string();
+		parser.ws();
+
+		if(add_type == "table"){
+			tables.emplace_back();
+			curTable().name = std::move(table_name);
+		}else if(add_type == "chain"){
+			auto chain_name = parser.string();
+			parser.ws();
+			auto& chain = getChainOrCreate_NFT(table_name,chain_name);
+			chain.line = this->line;
+
+			while(!parser.done()){
+				parser.ws();
+				auto w = parser.string();
+				if(w == "policy"){
+					parser.ws();
+					auto type = parser.string();
+					type.remove_suffix(1);//remove ';'
+					if(type == "accept"){
+						chain.policy = Chain::Policy::ACCEPT;
+					}else if(type == "drop"){
+						chain.policy = Chain::Policy::ACCEPT;
+					}else {
+						mlog::warn("unknown policy \"{}\" in line {}",type,this->line);
+					}
+					break;
+				}
+			}
+		}else if(add_type == "rule"){
+			Rule ret;
+			auto& result = ret.maximumMatchingSet;
+			result = {{{}}};
+			ret.line = this->line;
+			parser.ws();
+			auto chain_name = parser.string();
+			ret.table_name = curTable().name;
+			while(!parser.done()){
+				parser.ws();
+				auto cmd = parser.string();
+
+				if(cmd == "accept"){
+					ret.jumpTarget = &getChainOrCreate_NFT(table_name,"ACCEPT");
+				}else if(cmd == "drop" || cmd == "queue"){
+					ret.jumpTarget = &getChainOrCreate_NFT(table_name,"DROP");
+				}else if(cmd == "continue"){
+					ret.shouldBeIgnored = true;
+				}else if(cmd == "return"){
+					ret.jumpTarget = &getChainOrCreate_NFT(table_name,"RETURN");
+				}else if(cmd == "jump" || cmd == "goto"){
+					parser.ws();
+					auto target = parser.string();
+					ret.jumpTarget = &getChainOrCreate_NFT(table_name, std::string{target});
+
+					if(cmd == "jump")ret.jumpType = JumpType::JUMP;
+					else ret.jumpType = JumpType::GOTO;
+				}else if(cmd == "oifname" || cmd == "iifname"){
+					parser.ws();
+					auto negation = parser.matchStaticString("!=");
+					parser.ws();
+
+					auto name = parser.string();
+					name.remove_prefix(1);//remove '"'
+					name.remove_suffix(1);//remove '"'
+
+					auto& interface_map = (cmd[0] == 'i' ? in_interfaces : out_interfaces);
+					auto value = interface_map[std::string{name}];
+					if(cmd == "iifname"){
+						result.applyRange_helper<PSegment::IN_INTERFACE_INDEX>(std::vector{std::pair{value,value}},negation);
+						ret.flag_segments[Rule::IN_INTERFACE].emplace(value,value);
+					}else{
+						result.applyRange_helper<PSegment::OUT_INTERFACE_INDEX>(std::vector{std::pair{value,value}},negation);
+						ret.flag_segments[Rule::OUT_INTERFACE].emplace(value,value);
+					}
+				}else if(cmd == "saddr"){
+					parser.ws();
+					auto negation = parser.matchStaticString("!=");
+					parser.ws();
+
+					auto [start,end] = parseIP(parser.string(),this->line);
+					result.applyRange_helper<PSegment::SRC_IP_INDEX>(std::vector{std::pair{start,end}},negation);
+					ret.flag_segments[Rule::SRC_IP].emplace(start,end);
+				}else if(cmd == "daddr"){
+					parser.ws();
+					auto negation = parser.matchStaticString("!=");
+					parser.ws();
+
+					parser.ws();
+					auto [start,end] = parseIP(parser.string(),this->line);
+					result.applyRange_helper<PSegment::DST_IP_INDEX>(std::vector{std::pair{start,end}},negation);
+					ret.flag_segments[Rule::DST_IP].emplace(start,end);
+				}else if(cmd == "dport" || cmd == "sport"){
+					parser.ws();
+					auto negation = parser.matchStaticString("!=");
+					parser.ws();
+
+					std::vector<std::pair<uint16_t,uint16_t>> port_ranges;
+					if(parser.matchStaticString("{")){
+						bool first = true;
+						while(true){
+							parser.ws();
+							if(first)first = false;
+							else{
+								if(parser.matchStaticString("}"))break;
+								if(!parser.matchStaticString(",")){
+									mlog::warn("parsing issue in port list\n{}:\"{}\"",this->line,line);
+								}
+								parser.ws();
+							}
+	
+							auto v1 = parser.integer();
+							if(parser.matchStaticString("-")){
+								auto v2 = parser.integer();
+								port_ranges.emplace_back(*v1,*v2);
+							}else{
+								port_ranges.emplace_back(*v1,*v1);
+							}
+						}
+					}else{
+						auto v1 = parser.integer();
+						if(parser.matchStaticString("-")){
+							auto v2 = parser.integer();
+							port_ranges.emplace_back(*v1,*v2);
+						}else{
+							port_ranges.emplace_back(*v1,*v1);
+						}
+					}
+					if(cmd == "sport"){
+						result.applyRange_helper<PSegment::SRC_PORT_INDEX>(port_ranges,negation);
+						ret.flag_segments[Rule::SRC_PORT].insert(std::begin(port_ranges),std::end(port_ranges));
+					}else if(cmd == "dport"){
+						result.applyRange_helper<PSegment::DST_PORT_INDEX>(port_ranges,negation);
+						ret.flag_segments[Rule::DST_PORT].insert(std::begin(port_ranges),std::end(port_ranges));
+					}
+				}else if(cmd == "protocol" || cmd == "udp" || cmd == "tcp" || cmd == "icmp"){
+					parser.ws();
+					auto negation = parser.matchStaticString("!=");
+					parser.ws();
+
+					uint8_t protocol_index;
+					if(cmd == "protocol"){
+						auto protocol_name = std::string{parser.string()};
+						parser.ws();
+						protocol_index = protocols[protocol_name];
+					}else{
+						protocol_index = protocols[std::string{cmd}];
+					}
+
+					result.applyRange_helper<PSegment::PROTOCOL_INDEX>(std::vector{std::pair{protocol_index,protocol_index}},negation);
+					ret.flag_segments[Rule::PROTOCOL].emplace(protocol_index,protocol_index);
+				}else if(cmd == "snat" || cmd == "dnat"){
+					parser.ws();
+					parser.matchStaticString("to");
+					parser.ws();
+					auto result = parser.until("-");
+					std::string_view ip;
+					if(result){
+						ip = result->first;
+						parser.skip(1);
+					}else{
+						ip = parser.string();
+					}
+
+					auto [start_ip,end_ip] = parseIP(ip,this->line);
+					if(result){
+						auto next = parser.string();
+						end_ip = parseIP(next,this->line).second;
+					}
+					parser.ws();
+					ret.nat = {start_ip,end_ip,false,0,0};
+				}else{
+					mlog::debug("unknown cmd {}\n",cmd);
+				}
+			}
+			if(!ret.jumpTarget)ret.shouldBeIgnored = true;
+			ret.line_str = std::move(line);
+			getChainOrCreate_NFT(table_name,chain_name).rules.emplace_back(std::move(ret));
+		}else{
+			mlog::warn("unknown word \"{}\" in line {}",add_type,this->line);
+		}
+	}
+	for(auto& table : tables){
+		for(auto& [chain_name,chain] : nft_chains[table.name]){
+			if(chain_name == "ACCEPT")chain->special = Chain::Special::ACCEPT;
+			else if(chain_name == "DROP")chain->special = Chain::Special::DROP;
+			else if(chain_name == "REJECT")chain->special = Chain::Special::REJECT;
+			else if(chain_name == "RETURN")chain->special = Chain::Special::RETURN;
+			else if(chain_name == "DNAT")chain->special = Chain::Special::DNAT;
+			else if(chain_name == "SNAT")chain->special = Chain::Special::SNAT;
+			table.chains.emplace_back(std::move(chain));
+		}
+	}
+	ruleset.tables = std::move(tables);
 }
 void RulesetParser::parseRuleset(std::istream& in){
 	std::string line;

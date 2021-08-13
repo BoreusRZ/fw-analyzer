@@ -8,6 +8,7 @@ namespace args {
 	inline std::optional<std::string> ipset_filename;
 	inline bool verbose;
 	inline bool progress;
+	inline bool nft;
 	inline bool analyze_consumers;
 	inline int threads;
 	inline config_t config;

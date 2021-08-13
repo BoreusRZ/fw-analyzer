@@ -1,6 +1,7 @@
 #include "log.hpp"
 #include "util.hpp"
 #include <fmt/core.h>
+#include <vector>
 
 namespace mlog{
 	Level level = Level::INFO;
@@ -68,12 +69,12 @@ namespace mlog{
 		}
 	}
 	void printPostfix(){
-		fmt::print(level_postfix);
+		fmt::print("{}",level_postfix);
 	}
 	void printPrefix(){
-		fmt::print(level_prefix);
+		fmt::print("{}",level_prefix);
 		for(auto& prefix : prefixes){
-			fmt::print(prefix());
+			fmt::print("{}",prefix());
 		}
 		fmt::print(": ");
 	}

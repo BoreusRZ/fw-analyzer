@@ -14,6 +14,11 @@ namespace args{
 		constexpr auto IPSET_ARG = "--ipset";
 		constexpr auto CONFIG_ARG = "--config";
 		constexpr auto THREADS_ARG = "--threads";
+		constexpr auto NFT_ARG = "--nft";
+		argparser.add_argument(NFT_ARG)
+			.default_value(false)
+			.implicit_value(true)
+			.help("enables nftables-ruleset parser");
 		argparser.add_argument("-V", VERBOSE_ARG)
 			.default_value(false)
 			.implicit_value(true)
@@ -50,6 +55,7 @@ namespace args{
 		PRESENT(ruleset_filename,RULESET_ARG);
 		PRESENT(ipset_filename,IPSET_ARG);
 		GET(verbose,VERBOSE_ARG);
+		GET(nft,NFT_ARG);
 		GET(progress,PROGRESS_ARG);
 		std::vector<std::string> analyze;
 		GET(analyze,ANALYZE_ARG);

@@ -15,7 +15,11 @@ int main(int argc, char** argv){
 	if(args::ipset_filename){
 		parser.parseIpSets(*args::ipset_filename);
 	}
-	parser.parseRuleset(*args::ruleset_filename);
+	if(args::nft){
+		parser.parseRuleset_NFT(*args::ruleset_filename);
+	}else{
+		parser.parseRuleset(*args::ruleset_filename);
+	}
 
 	IpAnalyzer analyzer(parser.releaseRuleset());
 	auto& parse_results = parser.getInfo();
